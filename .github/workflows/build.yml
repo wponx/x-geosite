@@ -1,0 +1,77 @@
+name: Build geosite
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - "README.md"
+      - ".gitignore"
+      - "LICENSE"
+      - "**/dependabot.yml"
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout codebase
+        uses: actions/checkout@v4
+        with:
+          path: code
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: code/go.mod
+          
+      - name: Set tag
+        run: |
+          DAILY_TAG=$(date +%Y%m%d%H%M)
+          echo "DAILY_TAG=$DAILY_TAG" >> $GITHUB_ENV
+          
+      - name: Create Tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {DAILY_TAG} = process.env
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${DAILY_TAG}`,
+              sha: context.sha
+            })
+
+      - name: Build dlc.dat file
+        run: |
+          cd code || exit 1
+          go run ./ --outputdir=../
+          cd ../ && rm -rf code
+
+
+      - name: Move files to publish directory
+        run: |
+          mkdir publish
+          mv ./*.dat publish
+          
+      - name: Git push assets to "release" branch
+        run: |
+          cd publish || exit 1
+          git init
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b release
+          git add -A
+          git commit -m "${{ env.DAILY_TAG }}"
+          git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git push -f -u origin release
+          
+      - name: Publish release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.DAILY_TAG }}
+          name: ${{ env.DAILY_TAG }}
+          prerelease: false
+          draft: false
+          files: "publish/*"
